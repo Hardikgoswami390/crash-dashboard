@@ -5,14 +5,7 @@ Beautiful, user-friendly Streamlit application for visualizing crash data
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import os
-from io import StringIO
-import requests
-
-# Google Sheet Published CSV URL - Data auto-loads from here!
-GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSbZ0sj-3jmYbQUes4EVl5LmWONlc3NiHORZdL81N4yAnxMg3t_XKsy-tecLYCrvaPHHqD2XQvlKZ2b/pub?gid=1768792531&single=true&output=csv"
 
 # Page configuration
 st.set_page_config(
@@ -33,10 +26,6 @@ st.markdown("""
         --card-border: rgba(99, 102, 241, 0.2);
         --text-primary: #f8fafc;
         --text-secondary: #94a3b8;
-        --accent-blue: #3b82f6;
-        --accent-green: #10b981;
-        --accent-red: #ef4444;
-        --accent-purple: #8b5cf6;
     }
     
     .stApp {
@@ -121,18 +110,6 @@ st.markdown("""
         border-radius: 12px;
         padding: 1.25rem;
         margin: 1rem 0;
-    }
-    
-    .insight-box .title {
-        color: var(--accent-blue);
-        font-weight: 600;
-        font-size: 0.9rem;
-        margin-bottom: 0.5rem;
-    }
-    
-    .insight-box .text {
-        color: var(--text-primary);
-        font-size: 1rem;
     }
     
     section[data-testid="stSidebar"] {
@@ -238,10 +215,18 @@ def process_dataframe(df):
         df = df[df['Date'].notna()]
     
     if 'Game' in df.columns:
-        df['Game'] = df['Game'].str.strip().str.title()
+        df['Game'] = df['Game'].astype(str).str.strip().str.title()
+    else:
+        df['Game'] = 'Unknown'
+    
     if 'Platform' in df.columns:
-        df['Platform'] = df['Platform'].str.strip().str.title()
-        df['Platform'] = df['Platform'].replace({'Ios': 'iOS', 'IOS': 'iOS'})
+        df['Platform'] = df['Platform'].astype(str).str.strip().str.title()
+        df['Platform'] = df['Platform'].replace({'Ios': 'iOS', 'IOS': 'iOS', 'Nan': 'Unknown'})
+    else:
+        df['Platform'] = 'Unknown'
+    
+    df['Game'] = df['Game'].fillna('Unknown').replace('Nan', 'Unknown')
+    df['Platform'] = df['Platform'].fillna('Unknown').replace('Nan', 'Unknown')
     
     crash_count_col = None
     for col in df.columns:
@@ -261,7 +246,7 @@ def process_dataframe(df):
     else:
         df['Network_Name'] = 'Unknown'
     
-    if 'Date' in df.columns:
+    if 'Date' in df.columns and df['Date'].notna().any():
         df['Year'] = df['Date'].dt.year
         df['Month'] = df['Date'].dt.month
         df['Year_Month'] = df['Date'].dt.to_period('M')
@@ -280,29 +265,6 @@ def render_metric_card(icon, value, label):
     """
 
 
-def render_insight_box(icon, title, text):
-    return f"""
-    <div class="insight-box">
-        <div class="title">{icon} {title}</div>
-        <div class="text">{text}</div>
-    </div>
-    """
-
-
-# ==================== DATA LOADING ====================
-
-@st.cache_data(ttl=300)  # Cache for 5 minutes, then auto-refresh
-def load_data_from_google_sheet():
-    """Auto-load data from Google Sheet (refreshes every 5 minutes)"""
-    try:
-        response = requests.get(GOOGLE_SHEET_CSV_URL, timeout=10)
-        response.raise_for_status()
-        df = pd.read_csv(StringIO(response.text))
-        return df, None
-    except Exception as e:
-        return None, str(e)
-
-
 # ==================== MAIN APP ====================
 
 def main():
@@ -311,8 +273,6 @@ def main():
         st.session_state.df = None
     if 'last_refresh' not in st.session_state:
         st.session_state.last_refresh = None
-    if 'data_source' not in st.session_state:
-        st.session_state.data_source = None
     
     # Welcome Banner
     st.markdown("""
@@ -322,68 +282,45 @@ def main():
         </div>
     """, unsafe_allow_html=True)
     
-    # Auto-load from Google Sheet
-    with st.spinner("🔄 Loading latest data from Google Sheet..."):
-        df, error = load_data_from_google_sheet()
+    # Data Upload Section
+    st.markdown("""
+    <div class="upload-box">
+        <h3 style="color: #f8fafc; margin: 0 0 0.5rem 0;">📊 Upload Your Crash Data</h3>
+        <p style="color: #94a3b8; margin: 0;">
+            Download CSV from your Google Sheet → Upload here → Dashboard updates instantly!
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    if df is not None:
-        df = process_dataframe(df)
-        st.session_state.df = df
-        st.session_state.last_refresh = datetime.now()
-        st.session_state.data_source = "Google Sheet"
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "📁 Drop your CSV file here",
+        type=['csv'],
+        help="Download CSV from Google Sheets: File → Download → CSV"
+    )
     
-    # Show data source info
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        if st.session_state.data_source == "Google Sheet":
-            st.success(f"✅ **{len(df)}** crash reports loaded from Google Sheet")
-        elif error:
-            st.warning(f"⚠️ Could not load from Google Sheet: {error}")
-    
-    with col2:
-        if st.button("🔄 Refresh Now"):
-            st.cache_data.clear()
-            st.rerun()
-    
-    # Optional manual upload
-    with st.expander("📁 Or upload CSV manually"):
-        uploaded_file = st.file_uploader(
-            "Drop CSV file here",
-            type=['csv'],
-            help="Override with your own CSV file"
-        )
-        if uploaded_file is not None:
-            try:
-                df = pd.read_csv(uploaded_file)
-                df = process_dataframe(df)
-                st.session_state.df = df
-                st.session_state.last_refresh = datetime.now()
-                st.session_state.data_source = "Uploaded File"
-                st.success(f"✅ Loaded **{len(df)}** rows from uploaded file!")
-            except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
+    # Process uploaded file
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            df = process_dataframe(df)
+            st.session_state.df = df
+            st.session_state.last_refresh = datetime.now()
+            st.success(f"✅ Loaded **{len(df)}** crash reports!")
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
     
     # Check if we have data
     df = st.session_state.df
     
-    # Ensure required columns exist
-    if df is not None:
-        if 'Platform' not in df.columns:
-            df['Platform'] = 'Unknown'
-        df['Platform'] = df['Platform'].fillna('Unknown')
-        
-        if 'Game' not in df.columns:
-            df['Game'] = 'Unknown'
-        df['Game'] = df['Game'].fillna('Unknown')
-    
     if df is None or len(df) == 0:
         st.markdown("""
         <div style="text-align: center; padding: 3rem; background: rgba(30, 32, 44, 0.5); border-radius: 16px; margin-top: 2rem;">
-            <div style="font-size: 4rem; margin-bottom: 1rem;">⚠️</div>
-            <h2 style="color: #f8fafc;">Unable to Load Data</h2>
+            <div style="font-size: 4rem; margin-bottom: 1rem;">📤</div>
+            <h2 style="color: #f8fafc;">Upload a CSV to Get Started</h2>
             <p style="color: #94a3b8; max-width: 400px; margin: 0 auto;">
-                Make sure your Google Sheet is published:<br>
-                File → Share → Publish to web → CSV
+                Go to your Google Sheet → File → Download → CSV<br>
+                Then drag & drop the file above!
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -396,9 +333,9 @@ def main():
         </div>
     """, unsafe_allow_html=True)
     
-    if st.session_state.last_upload:
+    if st.session_state.last_refresh:
         st.sidebar.success(f"✅ Data loaded")
-        st.sidebar.caption(f"📅 Uploaded: {st.session_state.last_upload.strftime('%I:%M %p')}")
+        st.sidebar.caption(f"📅 Loaded: {st.session_state.last_refresh.strftime('%I:%M %p')}")
         st.sidebar.caption(f"📊 Rows: {len(df):,}")
     
     st.sidebar.markdown("---")
@@ -429,12 +366,16 @@ def main():
     
     # Game Filter
     st.sidebar.markdown("### 🎮 Games")
-    games = sorted([str(g) for g in df['Game'].dropna().unique().tolist() if str(g).strip()])
+    games = sorted([str(g) for g in df['Game'].dropna().unique().tolist() if str(g).strip() and str(g) != 'Unknown'])
+    if not games:
+        games = ['Unknown']
     selected_games = st.sidebar.multiselect("Choose games:", games, default=games)
     
     # Platform Filter
     st.sidebar.markdown("### 📱 Platforms")
-    platforms = sorted([str(p) for p in df['Platform'].dropna().unique().tolist() if str(p).strip()])
+    platforms = sorted([str(p) for p in df['Platform'].dropna().unique().tolist() if str(p).strip() and str(p) != 'Unknown'])
+    if not platforms:
+        platforms = ['Unknown']
     selected_platforms = st.sidebar.multiselect("Choose platforms:", platforms, default=platforms)
     
     # Apply Filters
@@ -443,11 +384,11 @@ def main():
         filtered_df = filtered_df[filtered_df['Game'].isin(selected_games)]
     if selected_platforms:
         filtered_df = filtered_df[filtered_df['Platform'].isin(selected_platforms)]
-    if date_range:
+    if date_range and 'Date' in filtered_df.columns:
         filtered_df = filtered_df[(filtered_df['Date'] >= date_range[0]) & (filtered_df['Date'] <= date_range[1])]
     
     if len(filtered_df) == 0:
-        st.warning("⚠️ No data matches your filters.")
+        st.warning("⚠️ No data matches your filters. Try adjusting the filters in the sidebar.")
         st.stop()
     
     # ==================== METRICS ====================
@@ -472,13 +413,15 @@ def main():
     st.markdown("<br>", unsafe_allow_html=True)
     
     # Quick Insight
-    if len(filtered_df) > 0:
+    if len(filtered_df) > 0 and filtered_df['Crash_Count_Numeric'].sum() > 0:
         top_game = filtered_df.groupby('Game')['Crash_Count_Numeric'].sum().idxmax()
         top_crashes = filtered_df.groupby('Game')['Crash_Count_Numeric'].sum().max()
-        st.markdown(render_insight_box(
-            "💡", "Quick Insight",
-            f"**{top_game}** has the most crashes with **{top_crashes:,}** total crashes."
-        ), unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="insight-box">
+            <div style="color: #3b82f6; font-weight: 600; font-size: 0.9rem; margin-bottom: 0.5rem;">💡 Quick Insight</div>
+            <div style="color: #f8fafc; font-size: 1rem;"><strong>{top_game}</strong> has the most crashes with <strong>{top_crashes:,}</strong> total crashes.</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # ==================== TABS ====================
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -532,6 +475,8 @@ def main():
                 font=dict(color='#94a3b8')
             )
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("📅 Date information not available for trend analysis")
     
     # TAB 3: Crash Types
     with tab3:
@@ -575,7 +520,7 @@ def main():
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("No network issues found")
+            st.info("No network issues found in the data")
     
     # TAB 5: All Data
     with tab5:
